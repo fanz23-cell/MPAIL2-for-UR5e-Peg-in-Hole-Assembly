@@ -46,7 +46,10 @@ class Dynamics(torch.nn.Module):
             next_latent: Next latent state of shape (..., latent_dim)
         """
         model_input = torch.cat((current_latent, control), dim=-1)
-        return self.model(model_input)
+        pred = self.model(model_input)
+        if self.cfg.residual:
+            return current_latent + pred
+        return pred
 
     @torch.compile
     def forward(

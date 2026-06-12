@@ -17,15 +17,16 @@ def ensure_wandb_settings(log_cfg: Any) -> None:
     log_cfg.wandb_project = getattr(log_cfg, "wandb_project", None) or os.environ.get("WANDB_PROJECT")
     log_cfg.wandb_entity = getattr(log_cfg, "wandb_entity", None) or os.environ.get("WANDB_ENTITY")
 
-    if not log_cfg.wandb_project or not log_cfg.wandb_entity:
+    if not log_cfg.wandb_project:
         raise ValueError(
             "\033[33m"
             + """
-WANDB_PROJECT and WANDB_ENTITY environment variables must be set when wandb logging is enabled.
+WANDB_PROJECT must be set when wandb logging is enabled. WANDB_ENTITY is optional and wandb
+will use your default entity when it is omitted.
 Set them with:
 
 conda env config vars set WANDB_PROJECT=<project>
-conda env config vars set WANDB_ENTITY=<entity>
+conda env config vars set WANDB_ENTITY=<entity>  # optional
 
 Or disable wandb with: log.no_wandb=True
             """
@@ -52,6 +53,11 @@ def make_runner_log_cfg(log_cfg: Any, *, logger: str | None) -> MPAIL2RunnerCfg.
         no_wandb=log_cfg.no_wandb,
         log_dir=log_cfg.run_log_dir,
         video_interval=log_cfg.video_interval,
+        video_enabled=bool(getattr(log_cfg, "video", False)),
+        video_length=int(getattr(log_cfg, "video_length", 0) or 0),
+        video_resolution=tuple(getattr(log_cfg, "video_resolution", (640, 360))),
+        video_crf=int(getattr(log_cfg, "video_crf", 30) or 30),
+        video_fps=10,
     )
 
 
@@ -63,10 +69,11 @@ def maybe_init_wandb(*, log_cfg: Any, run_name: str, config_obj: Any, run_dir: s
 
     kwargs = {
         "project": log_cfg.wandb_project,
-        "entity": log_cfg.wandb_entity,
         "name": run_name,
         "config": asdict(config_obj) if hasattr(config_obj, "__dataclass_fields__") else config_obj,
     }
+    if log_cfg.wandb_entity:
+        kwargs["entity"] = log_cfg.wandb_entity
     if run_dir:
         kwargs["dir"] = run_dir
     wandb.init(**kwargs)
@@ -80,4 +87,3 @@ def finish_wandb_if_running(*, log_cfg: Any) -> None:
 
     if wandb.run is not None:
         wandb.finish()
-

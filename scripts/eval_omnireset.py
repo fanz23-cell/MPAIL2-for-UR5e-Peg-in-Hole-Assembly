@@ -19,8 +19,20 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", type=Path, required=True)
 parser.add_argument("--output", type=Path, default=Path("/tmp/eval_omnireset.mp4"))
+parser.add_argument(
+    "--demo-path",
+    type=Path,
+    default=Path("mpail2/train/isaac_franka/demos/peg_expert_rl_mpail_filtered.pt"),
+    help="MPAIL demo file used to reconstruct the fixed observation normalizer.",
+)
 parser.add_argument("--num-envs", type=int, default=1)
 parser.add_argument("--num-episodes", type=int, default=3)
+parser.add_argument(
+    "--max-steps",
+    type=int,
+    default=None,
+    help="Optional hard cap on total eval steps; useful for quick videos.",
+)
 parser.add_argument("--task", default="OmniReset-Ur5eRobotiq2f85-RelCartesianOSC-State-Finetune-Play-v0")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
@@ -40,6 +52,7 @@ import uwlab_tasks     # noqa
 
 from mpail2.runner import MPAIL2Runner
 from mpail2.train.configs.omnireset_learner_config import OmniResetStateLearnerConfig
+from mpail2.train.utils.demos import load_demonstrations
 from mpail2.train.utils.learner_from_spaces import sync_learner_dims_from_env
 from mpail2.learner import MPAIL2Learner
 
@@ -55,10 +68,10 @@ def main():
     learner_cfg = OmniResetStateLearnerConfig()
     learner_cfg = sync_learner_dims_from_env(learner_cfg, env)
 
-    # We need a dummy demo tensor just to init the learner
+    # Use the same demo statistics as training for the fixed observation normalizer.
+    demonstrations = load_demonstrations(str(args_cli.demo_path), device=device)
     obs_dim = learner_cfg.planner_cfg.encoder_cfg.input_dim
-    dummy_demos = {"policy": torch.zeros(10, 2, obs_dim, device=device)}
-    learner = MPAIL2Learner(dummy_demos, args_cli.num_envs, learner_cfg, device=device)
+    learner = MPAIL2Learner(demonstrations, args_cli.num_envs, learner_cfg, device=device)
     learner.init_storage(
         num_envs=args_cli.num_envs,
         num_steps_per_env=env.unwrapped.max_episode_length,
@@ -78,7 +91,8 @@ def main():
     obs, _ = env.reset()
     ep_reward = 0.0
     episodes_done = 0
-    max_steps = env.unwrapped.max_episode_length * args_cli.num_episodes + 10
+    default_max_steps = env.unwrapped.max_episode_length * args_cli.num_episodes + 10
+    max_steps = args_cli.max_steps if args_cli.max_steps is not None else default_max_steps
 
     for step in range(max_steps):
         with torch.inference_mode():

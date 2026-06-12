@@ -139,6 +139,8 @@ class DynamicsConfig(cfgs.DynamicsCfg):
         "override_last_layer_norm": True,
     })
 
+    residual: bool = False
+
 #
 # Sampling/Policy
 #
@@ -174,6 +176,11 @@ class PlannerConfig(cfgs.PlannerCfg):
     num_elites: int = 64
     temperature: float = 2.0
     opt_iters: int = OPT_ITERS
+    value_return_type: str = "avg"
+    terminal_value_scale: float = 1.0
+    reward_center_for_planning: bool = False
+    reward_clip_for_planning: float | None = None
+    base_plan_delta_penalty: float = 0.0
 
     reward_cfg: RewardConfig = field(default_factory=RewardConfig)
     value_cfg: EnsembleValueConfig = field(default_factory=EnsembleValueConfig)
@@ -213,6 +220,8 @@ class RewardLearnerConfig(cfgs.RewardLearnerCfg):
     gp_coeff: float = 0.1
 
     gp_target_gradient: float = 1.0
+
+    r1_coeff: float = 0.0
 
 @dataclass(kw_only=True)
 class PolicyLearnerConfig(cfgs.PolicyLearnerCfg):
@@ -255,6 +264,74 @@ class LearnerConfig(cfgs.MPAIL2LearnerCfg):
     replay_size: int = 100_000
     replay_batch_size: int = 256
 
+    reward_center_for_planning: bool = False
+    reward_center_mode: str = "midpoint"
+    reward_clip_for_planning: float | None = None
+    demo_action_bc_path: str | None = None
+    demo_action_bc_coeff: float = 0.0
+    demo_action_bc_pretrain_steps: int = 0
+    demo_action_bc_pretrain_batch_size: int = 256
+    iql_pretrain_path: str | None = None
+    iql_pretrain_steps: int = 0
+    iql_pretrain_batch_size: int = 512
+    iql_expectile: float = 0.7
+    iql_beta: float = 3.0
+    iql_adv_clip: float = 100.0
+    iql_demo_reward: float = 1.0
+    iql_dynamics_coeff: float = 1.0
+    iqlearn_pretrain_path: str | None = None
+    iqlearn_pretrain_steps: int = 0
+    iqlearn_pretrain_batch_size: int = 512
+    iqlearn_alpha: float = 1.0
+    iqlearn_init_temp: float | None = None
+    iqlearn_learn_temp: bool = False
+    iqlearn_policy_batch_ratio: float = 1.0
+    iqlearn_regularize_all: bool = True
+    iqlearn_log_every: int = 1000
+    iqlearn_dynamics_coeff: float = 1.0
+    iqlearn_pretrain_deterministic_policy: bool = False
+    iqlearn_pretrain_bc_coeff: float = 0.0
+    iqlearn_reward_distill_steps: int = 0
+    iqlearn_reward_distill_batch_size: int = 512
+    iqlearn_reward_clip: float | None = None
+    iqlearn_online_steps: int = 0
+    iqlearn_online_batch_size: int = 512
+    iqlearn_online_policy_batch_ratio: float = 1.0
+    iqlearn_online_regularize_all: bool = True
+    iqlearn_online_update_policy: bool = True
+    iqlearn_online_reward_distill_steps: int = 0
+    iqlearn_online_reward_distill_batch_size: int = 512
+    demo_success_replay_path: str | None = None
+    demo_success_replay_fraction: float = 0.0
+    protect_demo_success_replay: bool = True
+    skip_updates: bool = False
+    skip_policy_updates: bool = False
+    skip_reward_updates: bool = False
+    mppi_policy_blend: float = 1.0
+    mppi_policy_delta_max: float | None = None
+    mppi_policy_delta_l2_max: float | None = None
+    mpail_policy_loss_coeff: float = 1.0
+    policy_update_start_iter: int = 0
+    policy_trust_region_coeff: float = 0.0
+    online_teacher_bc_steps: int = 0
+    online_teacher_bc_batch_size: int = 256
+    residual_adapter_enabled: bool = False
+    residual_adapter_apply: bool = False
+    residual_adapter_steps: int = 0
+    residual_adapter_batch_size: int = 256
+    residual_adapter_lr: float = 1e-4
+    residual_adapter_hidden_dim: int = 256
+    residual_adapter_scale: float = 1.0
+    demo_action_bc_direct_steps: int = 0
+    demo_action_direct_mode: str = "policy"
+    demo_action_dyn_coeff: float = 0.0
+    demo_action_dyn_pretrain_steps: int = 0
+    demo_action_dyn_pretrain_batch_size: int = 256
+    demo_action_rank_coeff: float = 0.0
+    demo_action_rank_margin: float = 0.02
+    dyn_agent_coeff: float = 1.0
+    demo_action_raw_limit: list[float] | None = None
+
     # Loss horizon for trajectory-based updates
     loss_horizon: int = HORIZON  # Match num_timesteps in sampling_cfg
 
@@ -263,6 +340,8 @@ class LearnerConfig(cfgs.MPAIL2LearnerCfg):
 
     # Reward (adversarial training)
     reward_learner_cfg: cfgs.RewardLearnerCfg = field(default_factory=RewardLearnerConfig)
+    # Update reward every N gradient steps (1 = every step, 4 = once per 4 dyn/value/policy updates)
+    reward_update_every: int = 1
 
     # Value
     value_learner_cfg: cfgs.ValueLearnerCfg = field(default_factory=ValueLearnerConfig)

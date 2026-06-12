@@ -16,6 +16,8 @@ class FixedObsNormalizer(nn.Module):
         device: str = "cuda",
         eps: float = 1e-8,
         clip_obs: Optional[float] = 10.0,
+        std_floor: float = 0.0,
+        skip_low_std_dims: bool = False,
         **kwargs
     ):
         """
@@ -30,6 +32,8 @@ class FixedObsNormalizer(nn.Module):
         self.device = device
         self.eps = eps
         self.clip_obs = clip_obs
+        self.std_floor = std_floor
+        self.skip_low_std_dims = skip_low_std_dims
 
         # Compute and register statistics from demonstrations
         self._compute_statistics(demonstrations)
@@ -51,13 +55,21 @@ class FixedObsNormalizer(nn.Module):
             # Compute statistics along batch dimension
             mean = flat_data.mean(dim=0)
             std = flat_data.std(dim=0)
+            raw_std = std
+            if self.std_floor > 0:
+                low_std_mask = raw_std < self.std_floor
+                std = torch.clamp(raw_std, min=self.std_floor)
+            else:
+                low_std_mask = torch.zeros_like(raw_std, dtype=torch.bool)
 
             # Register as buffers so they're saved/loaded with model and moved with .to()
             self.register_buffer(f"{key}_mean", mean.to(self.device))
             self.register_buffer(f"{key}_std", std.to(self.device))
+            self.register_buffer(f"{key}_low_std_mask", low_std_mask.to(self.device))
 
             print(f"[FixedObsNormalizer] {key}: mean range [{mean.min():.3f}, {mean.max():.3f}], "
-                  f"std range [{std.min():.3f}, {std.max():.3f}]")
+                  f"std range [{raw_std.min():.3f}, {raw_std.max():.3f}], "
+                  f"effective std min {std.min():.3f}, low_std_dims {low_std_mask.sum().item()}")
 
     def forward(self, obs: Union[torch.Tensor, Dict[str, torch.Tensor]]) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         if isinstance(obs, dict):
@@ -66,7 +78,11 @@ class FixedObsNormalizer(nn.Module):
                 if hasattr(self, f"{key}_mean"):
                     mean = getattr(self, f"{key}_mean")
                     std = getattr(self, f"{key}_std")
-                    normalized_obs[key] = (value - mean) / (std + self.eps)
+                    normalized = (value - mean) / (std + self.eps)
+                    if self.skip_low_std_dims:
+                        low_std_mask = getattr(self, f"{key}_low_std_mask")
+                        normalized = torch.where(low_std_mask, value, normalized)
+                    normalized_obs[key] = normalized
                     if self.clip_obs is not None:
                         normalized_obs[key] = torch.clamp(normalized_obs[key], min=-self.clip_obs, max=self.clip_obs)
                 else:
@@ -79,7 +95,11 @@ class FixedObsNormalizer(nn.Module):
                 key = self._obs_keys[0]
                 mean = getattr(self, f"{key}_mean")
                 std = getattr(self, f"{key}_std")
-                return (obs - mean) / (std + self.eps)
+                normalized = (obs - mean) / (std + self.eps)
+                if self.skip_low_std_dims:
+                    low_std_mask = getattr(self, f"{key}_low_std_mask")
+                    normalized = torch.where(low_std_mask, obs, normalized)
+                return normalized
             return obs
 
     def inverse(self, normalized_obs: Union[torch.Tensor, Dict[str, torch.Tensor]]) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:

@@ -123,6 +123,9 @@ class DynamicsCfg:
 
     model_factory: callable = mlp_factory
 
+    residual: bool = False
+    '''If True, dynamics predicts a latent delta added to the current latent.'''
+
 ###############################################################################
 # SAMPLING CONFIGURATIONS
 ###############################################################################
@@ -184,6 +187,10 @@ class RewardCfg:
     class_type: Type['Reward'] = Reward
 
     state_dim: int = None
+
+    action_dim: int = None
+
+    use_action: bool = False
 
     model_kwargs: dict = None
 
@@ -299,6 +306,12 @@ class ObsNormalizerCfg:
     eps: float = 1e-8
     '''Small constant for numerical stability in fixed normalization'''
 
+    std_floor: float = 0.0
+    '''Minimum standard deviation used by fixed normalization. 0 keeps old behavior.'''
+
+    skip_low_std_dims: bool = False
+    '''If True, fixed normalization passes through dimensions whose demo std is below std_floor.'''
+
 ###############################################################################
 # VISUALIZATION CONFIGURATIONS
 ###############################################################################
@@ -407,6 +420,21 @@ class PlannerCfg:
     gamma: Optional[float] = None
     '''Discount factor for reward computation during planning'''
 
+    value_return_type: str = "avg"
+    '''Ensemble value aggregation used for the terminal value in MPPI planning.'''
+
+    terminal_value_scale: float = 1.0
+    '''Multiplier applied to the terminal value used by MPPI planning.'''
+
+    reward_center_for_planning: bool = False
+    '''If True, subtract a learner-provided reward center when MPPI evaluates rollouts.'''
+
+    reward_clip_for_planning: Optional[float] = None
+    '''Optional symmetric clip applied to centered rollout rewards before MPPI weighting.'''
+
+    base_plan_delta_penalty: float = 0.0
+    '''Penalty subtracted from MPPI candidate scores for moving away from the provided base plan.'''
+
     sampling_cfg: PolicySamplingCfg = None
     '''Configuration for sampling module'''
 
@@ -426,6 +454,8 @@ class PlannerCfg:
         if self.action_dim is not None:
             if self.value_cfg is not None:
                 self.value_cfg.action_dim = self.action_dim  # Value
+            if self.reward_cfg is not None:
+                self.reward_cfg.action_dim = self.action_dim  # Reward
             self.dynamics_cfg.action_dim = self.action_dim  # Dynamics
             self.sampling_cfg.action_dim = self.action_dim  # Policy
         if self.latent_dim is not None:
@@ -469,6 +499,411 @@ class MPAIL2LearnerCfg:
     When True, the next state value is set to 0 for terminal transitions,
     implementing the standard RL (1 - done) * V(s') term.'''
 
+    reward_center_for_planning: bool = False
+    '''If True, subtract the current reward center for value targets and MPPI planning.'''
+
+    reward_center_mode: Literal["midpoint", "demo_mean"] = "midpoint"
+    '''How to estimate the reward center from reward learner batches.'''
+
+    reward_clip_for_planning: Optional[float] = None
+    '''Optional symmetric clip applied to centered rewards used by value and planning.'''
+
+    demo_action_bc_path: Optional[str] = None
+    '''Optional raw expert dataset used to regularize the policy sampler toward expert actions.'''
+
+    demo_action_bc_coeff: float = 0.0
+    '''Weight for optional behavior-cloning loss on the policy sampler first action.'''
+
+    demo_action_bc_pretrain_steps: int = 0
+    '''Optional BC-only policy updates run before the first environment rollout.'''
+
+    demo_action_bc_pretrain_batch_size: int = 256
+    '''Batch size for optional BC-only policy pretraining.'''
+
+    iql_pretrain_path: Optional[str] = None
+    '''Optional expert transition dataset used for IQL-style warmstart of the same MPAIL models.'''
+
+    iql_pretrain_steps: int = 0
+    '''Number of IQL-style demo pretraining updates before the first environment rollout.'''
+
+    iql_pretrain_batch_size: int = 512
+    '''Batch size for IQL-style demo pretraining.'''
+
+    iql_expectile: float = 0.7
+    '''Expectile used when fitting the policy-action value proxy from demo-action Q values.'''
+
+    iql_beta: float = 3.0
+    '''Inverse temperature for advantage-weighted demo-action policy pretraining.'''
+
+    iql_adv_clip: float = 100.0
+    '''Maximum advantage weight used by IQL-style policy pretraining.'''
+
+    iql_demo_reward: float = 1.0
+    '''Constant reward assigned to expert demo transitions during IQL-style Q pretraining.'''
+
+    iql_dynamics_coeff: float = 1.0
+    '''Weight for same-transition latent dynamics pretraining inside the IQL warmstart.'''
+
+    iqlearn_pretrain_path: Optional[str] = None
+    '''Optional expert transition dataset used for IQ-Learn inverse-soft-Q warmstart.'''
+
+    iqlearn_pretrain_steps: int = 0
+    '''Number of IQ-Learn Q/policy updates before the first environment rollout.'''
+
+    iqlearn_pretrain_batch_size: int = 512
+    '''Batch size for IQ-Learn pretraining.'''
+
+    iqlearn_alpha: float = 1.0
+    '''Chi-square regularization alpha for IQ-Learn.'''
+
+    iqlearn_init_temp: Optional[float] = None
+    '''Optional SAC temperature used only to initialize IQ-Learn pretraining.'''
+
+    iqlearn_learn_temp: bool = False
+    '''If True, update SAC temperature during IQ-Learn pretraining.'''
+
+    iqlearn_policy_batch_ratio: float = 1.0
+    '''Policy/generated batch size as a multiple of the expert batch size in IQ-Learn pretraining.'''
+
+    iqlearn_regularize_all: bool = True
+    '''If True, apply IQ-Learn chi-square regularization to mixed expert+policy samples.'''
+
+    iqlearn_log_every: int = 1000
+    '''Print IQ-Learn pretraining diagnostics every this many steps.'''
+
+    iqlearn_dynamics_coeff: float = 1.0
+    '''Weight for expert-transition latent dynamics pretraining during IQ-Learn warmstart.'''
+
+    iqlearn_pretrain_deterministic_policy: bool = False
+    '''If True, IQ-Learn pretraining uses the policy mean with no entropy/log-prob term, so policy std is not trained offline.'''
+
+    iqlearn_pretrain_bc_coeff: float = 0.0
+    '''Optional behavior-cloning anchor on expert actions during IQ-Learn pretraining.'''
+
+    iqlearn_reward_distill_steps: int = 0
+    '''Optional steps to distill recovered IQ reward Q-gamma*V(next) into the MPAIL reward model.'''
+
+    iqlearn_reward_distill_batch_size: int = 512
+    '''Batch size for IQ reward distillation.'''
+
+    iqlearn_reward_clip: Optional[float] = None
+    '''Optional symmetric clip for recovered IQ rewards before reward-model distillation.'''
+
+    iqlearn_online_steps: int = 0
+    '''Number of online IQ-Learn value/policy updates per learner update, using expert demos plus replay.'''
+
+    iqlearn_online_batch_size: int = 512
+    '''Batch size for online IQ-Learn expert and replay samples.'''
+
+    iqlearn_online_policy_batch_ratio: float = 1.0
+    '''Current-policy action batch size as a multiple of the online IQ-Learn batch size.'''
+
+    iqlearn_online_regularize_all: bool = True
+    '''If True, apply online IQ-Learn chi-square regularization to expert+replay+policy samples.'''
+
+    iqlearn_online_update_policy: bool = True
+    '''If True, apply the IQ-Learn actor update online in addition to MPAIL policy updates.'''
+
+    iqlearn_online_reward_distill_steps: int = 0
+    '''Number of online updates that distill recovered IQ reward into the MPAIL reward model.'''
+
+    iqlearn_online_reward_distill_batch_size: int = 512
+    '''Batch size for online IQ reward distillation from expert demos plus replay.'''
+
+    demo_success_replay_path: Optional[str] = None
+    '''Optional raw expert dataset inserted into replay as protected demo-success experience.'''
+
+    demo_success_replay_fraction: float = 0.0
+    '''Fraction of replay trajectory slots to seed with protected demo-success experience.'''
+
+    protect_demo_success_replay: bool = True
+    '''If True, FIFO replay replacement preserves demo-success replay trajectories when possible.'''
+
+    skip_updates: bool = False
+    '''If True, process rollouts into replay but skip all learner gradient updates.'''
+
+    skip_policy_updates: bool = False
+    '''If True, skip MPAIL policy-gradient updates while still training dynamics/reward/value.'''
+
+    skip_reward_updates: bool = False
+    '''If True, skip discriminator/reward updates while still training dynamics/value/policy as configured.'''
+
+    mppi_policy_blend: float = 1.0
+    '''When using MPPI actions, blend from direct policy action to MPPI action: 0=policy, 1=MPPI.'''
+
+    mppi_residual_base_policy: bool = False
+    '''If True, initialize MPPI sampling from the protected base policy plan instead of the previous MPPI plan.'''
+
+    mppi_action_library_size: int = 0
+    '''Number of nearest-neighbor demo action plans injected into each MPPI candidate set.'''
+
+    mppi_action_library_anchor_policy_size: int = 0
+    '''Number of protected base-policy plans prepended to the MPPI action library candidate set.'''
+
+    mppi_best_candidate_action: bool = False
+    '''If True, execute the best-scoring sampled candidate instead of the MPPI weighted-average action.'''
+
+    mppi_best_candidate_policy_margin: float = 0.0
+    '''Required rollout-return advantage over the policy anchor before accepting a best candidate.'''
+
+    mppi_best_candidate_score_mode: Literal["sum", "first"] = "sum"
+    '''Score used to choose the best candidate: full imagined return or first-step reward only.'''
+
+    mppi_best_candidate_delta_penalty: float = 0.0
+    '''Penalty applied to candidate score per unit normalized L2 distance from the protected policy action.'''
+
+    mppi_best_candidate_policy_cos_min: Optional[float] = None
+    '''If set, best-candidate selection ignores non-anchor candidates whose first action is below this policy cosine.'''
+
+    mppi_policy_delta_max: Optional[float] = None
+    '''Optional per-env max absolute normalized action delta allowed before falling back to policy action.'''
+
+    mppi_policy_delta_l2_max: Optional[float] = None
+    '''Optional L2 norm budget for normalized MPPI-policy correction before applying blend.'''
+
+    mppi_reward_gate_margin: Optional[float] = None
+    '''If set, accept MPPI correction only when planner reward exceeds policy reward by this margin.'''
+
+    mppi_policy_cos_min: Optional[float] = None
+    '''If set, accept MPPI correction only when MPPI-policy action cosine is above this threshold.'''
+
+    mppi_progress_gate_margin: Optional[float] = None
+    '''If set, accept correction only when predicted peg-in-hole distance is no worse than policy by this margin.'''
+
+    online_mppi_outcome_rank_coeff: float = 0.0
+    '''Reward-ranking coefficient from realized MPPI correction outcomes in the real environment.'''
+
+    online_mppi_outcome_rank_steps: int = 1
+    '''Reward optimizer steps per rollout for realized MPPI outcome ranking.'''
+
+    online_mppi_outcome_rank_batch_size: int = 256
+    '''Batch size for realized MPPI outcome ranking.'''
+
+    online_mppi_outcome_rank_buffer_size: int = 8192
+    '''Maximum number of realized MPPI outcome samples to keep.'''
+
+    online_mppi_outcome_rank_margin: float = 0.02
+    '''Reward margin for realized outcome ranking.'''
+
+    online_mppi_outcome_good_margin: float = 0.0
+    '''Actual distance improvement required to label a correction as good.'''
+
+    online_mppi_outcome_bad_margin: float = 0.0
+    '''Actual distance regression required to label a correction as bad.'''
+
+    online_mppi_outcome_horizon: int = 1
+    '''Real environment steps used to label whether an MPPI correction helped closed-loop progress.'''
+
+    online_mppi_outcome_good_weight: float = 1.0
+    '''Weight for ranking good corrections above policy.'''
+
+    online_mppi_outcome_bad_weight: float = 1.0
+    '''Weight for ranking bad corrections below policy.'''
+
+    online_mppi_candidate_rank_coeff: float = 0.0
+    '''Reward-ranking coefficient for teacher-labeled MPPI candidate-pool good/bad actions.'''
+
+    online_mppi_candidate_rank_steps: int = 1
+    '''Reward optimizer steps per rollout for candidate-pool ranking.'''
+
+    online_mppi_candidate_rank_batch_size: int = 256
+    '''Batch size for candidate-pool ranking.'''
+
+    online_mppi_candidate_rank_buffer_size: int = 8192
+    '''Maximum number of candidate-pool ranking samples to keep.'''
+
+    online_mppi_candidate_rank_margin: float = 0.02
+    '''Reward margin for candidate-pool good/bad actions relative to policy.'''
+
+    online_mppi_candidate_good_weight: float = 1.0
+    '''Weight for ranking teacher-better candidates above policy.'''
+
+    online_mppi_candidate_bad_weight: float = 1.0
+    '''Weight for ranking teacher-worse candidates below policy.'''
+
+    mppi_elite_adversarial_reward_coeff: float = 0.0
+    '''Extra WGAN generator weight for MPPI elite imagined transitions.'''
+
+    mppi_elite_adversarial_topk: int = 16
+    '''Number of highest-return MPPI elites per env to cache as adversarial reward negatives.'''
+
+    mppi_elite_adversarial_buffer_size: int = 32768
+    '''Maximum number of flattened MPPI elite imagined transitions kept for reward updates.'''
+
+    mppi_elite_adversarial_batch_size: int = 256
+    '''Batch size sampled from MPPI elite adversarial buffer during reward updates.'''
+
+    mppi_candidate_selector_enabled: bool = False
+    '''If True, create and train a local same-state candidate selector head.'''
+
+    mppi_candidate_selector_apply: bool = False
+    '''If True, use the candidate selector to score MPPI best-candidate actions.'''
+
+    mppi_candidate_selector_hidden_dim: int = 256
+    '''Hidden dimension for the local candidate selector.'''
+
+    mppi_candidate_selector_lr: float = 1e-4
+    '''Learning rate for the local candidate selector.'''
+
+    mppi_candidate_selector_margin: float = 0.02
+    '''Pairwise margin for local candidate selector ranking.'''
+
+    mpail_policy_loss_coeff: float = 1.0
+    '''Scale for the model-based MPAIL policy objective before adding BC regularization.'''
+
+    policy_update_start_iter: int = 0
+    '''Skip MPAIL policy-gradient updates before this learner iteration.'''
+
+    policy_trust_region_coeff: float = 0.0
+    '''MSE penalty keeping updated policy mean near the pre-update mean on replay states.'''
+
+    online_teacher_bc_steps: int = 0
+    '''Optional supervised policy updates on online teacher obs/action pairs collected in the rollout.'''
+
+    online_teacher_bc_batch_size: int = 256
+    '''Batch size for optional online teacher BC updates.'''
+
+    residual_adapter_enabled: bool = False
+    '''If True, train a small residual adapter on online action labels.'''
+
+    residual_adapter_apply: bool = False
+    '''If True, direct policy actions are corrected by the learned residual adapter.'''
+
+    residual_adapter_steps: int = 0
+    '''Number of residual-adapter updates per online label batch.'''
+
+    residual_adapter_batch_size: int = 256
+    '''Batch size for residual-adapter updates.'''
+
+    residual_adapter_lr: float = 1e-4
+    '''Optimizer learning rate for the learned residual adapter.'''
+
+    residual_adapter_hidden_dim: int = 256
+    '''Hidden dimension for the learned residual adapter MLP.'''
+
+    residual_adapter_scale: float = 1.0
+    '''Multiplier applied to the learned residual before clamping the final action.'''
+
+    residual_adapter_use_raw_obs: bool = False
+    '''If True, train/apply the residual adapter from raw policy observations instead of planner latent state.'''
+
+    mppi_residual_adapter_candidate_size: int = 0
+    '''Number of residual-adapter plans injected into the MPPI candidate set.'''
+
+    mppi_residual_adapter_candidate_max_scale: float = 1.0
+    '''Largest residual scale used when injecting residual-adapter MPPI candidates.'''
+
+    demo_action_bc_direct_steps: int = 0
+    '''Use the pretrained BC policy mean directly for this many action calls before enabling MPPI.'''
+
+    demo_action_direct_mode: Literal["policy", "knn"] = "policy"
+    '''How to choose direct demo-action bootstrap actions: learned BC policy or nearest demo observation.'''
+
+    raw_base_policy_checkpoint: Optional[str] = None
+    '''Optional checkpoint whose raw-obs policy sampler is used as the protected base controller.'''
+
+    raw_base_policy_obs_key: str = "raw_policy"
+    '''Observation key used by the protected raw-obs base policy.'''
+
+    raw_base_policy_obs_dim: int = 215
+    '''Input dimension for the protected raw-obs base policy.'''
+
+    raw_base_policy_normalizer_demo_path: Optional[str] = None
+    '''Raw-observation demonstration file used to normalize the protected base controller input.'''
+
+    raw_base_policy_normalizer_std_floor: float = 0.03
+    '''Minimum std for protected base policy input normalization.'''
+
+    demo_action_dyn_coeff: float = 0.0
+    '''Weight for optional one-step dynamics loss on expert obs/action/next_obs transitions.'''
+
+    demo_action_multistep_dyn_coeff: float = 0.0
+    '''Weight for optional multi-step dynamics loss on consecutive expert action sequences.'''
+
+    demo_action_multistep_dyn_horizon: int = 3
+    '''Horizon for optional multi-step demo-action dynamics rollout loss.'''
+
+    demo_action_dyn_pretrain_steps: int = 0
+    '''Optional demo-action dynamics updates run before the first environment rollout.'''
+
+    demo_action_dyn_pretrain_batch_size: int = 256
+    '''Batch size for optional demo-action dynamics pretraining.'''
+
+    demo_action_rank_coeff: float = 0.0
+    '''Weight for optional ranking loss that makes expert actions predict demo next states better than zero/random actions.'''
+
+    demo_action_rank_margin: float = 0.02
+    '''Margin used by the optional demo-action dynamics ranking loss.'''
+
+    demo_action_reward_rank_coeff: float = 0.0
+    '''Weight for optional reward ranking loss that scores expert actions above policy/zero/random actions.'''
+
+    demo_action_reward_rank_margin: float = 0.02
+    '''Margin used by the optional demo-action reward ranking loss.'''
+
+    demo_action_reward_rank_policy_weight: float = 1.0
+    '''Extra multiplier for the expert-vs-policy term in the demo-action reward ranking loss.'''
+
+    demo_action_reward_rank_mppi_weight: float = 0.0
+    '''Extra multiplier for same-state expert/policy-vs-MPPI hard-negative reward ranking.'''
+
+    demo_action_reward_rank_blended_weight: float = 0.0
+    '''Extra multiplier for same-state expert/policy-vs-blended-MPPI reward ranking.'''
+
+    demo_action_reward_rank_mppi_blend: Optional[float] = None
+    '''Blend used when constructing the optional blended-MPPI hard negative. Defaults to mppi_policy_blend.'''
+
+    online_mppi_reward_rank_coeff: float = 0.0
+    '''Weight for reward ranking on policy-visited states with teacher/policy above MPPI hard negatives.'''
+
+    online_mppi_reward_rank_margin: float = 0.02
+    '''Margin used by online MPPI hard-negative reward ranking.'''
+
+    online_mppi_reward_rank_mppi_weight: float = 1.0
+    '''Multiplier for online teacher/policy-vs-MPPI ranking terms.'''
+
+    online_mppi_reward_rank_policy_weight: float = 1.0
+    '''Multiplier for online teacher-vs-policy ranking terms.'''
+
+    online_mppi_reward_rank_blended_weight: float = 0.0
+    '''Multiplier for online teacher/policy-vs-blended-MPPI ranking terms.'''
+
+    online_mppi_next_state_rank_weight: float = 0.0
+    '''Multiplier for same-action reward ranking that penalizes bad MPPI imagined next states.'''
+
+    online_mppi_reward_rank_steps: int = 1
+    '''Reward optimizer steps per rollout using the online MPPI hard-negative buffer.'''
+
+    online_mppi_reward_rank_batch_size: int = 256
+    '''Batch size for online MPPI hard-negative reward ranking.'''
+
+    online_mppi_reward_rank_buffer_size: int = 8192
+    '''Maximum policy-visited states/actions kept for online MPPI hard-negative reward ranking.'''
+
+    dyn_agent_coeff: float = 1.0
+    '''Weight for the standard replay/agent dynamics JEP loss.'''
+
+    dyn_task_obs_coeff: float = 0.0
+    '''Extra dynamics loss weight on task-critical planner observation slices.'''
+
+    dyn_progress_coeff: float = 0.0
+    '''Extra dynamics loss weight on predicted peg-in-hole distance progress.'''
+
+    dyn_progress_sign_coeff: float = 0.0
+    '''Extra dynamics loss weight on the sign of predicted peg-in-hole progress.'''
+
+    dyn_progress_over_coeff: float = 0.0
+    '''Extra dynamics loss weight penalizing optimistic over-prediction of peg-in-hole progress.'''
+
+    dyn_counterfactual_progress_coeff: float = 0.0
+    '''Extra dynamics loss weight keeping unverified random/zero counterfactual actions conservative.'''
+
+    demo_action_raw_limit: Optional[list[float]] = None
+    '''Raw action limits used to normalize expert actions into the learner action range.'''
+
+    identity_encoder: bool = False
+    '''If True, use the compact policy observation itself as the planner latent.'''
+
     # Planner
     planner_cfg: PlannerCfg = None
     '''Configuration for MPPI module'''
@@ -497,6 +932,66 @@ class MPAIL2RunnerCfg:
     path_to_demonstrations: str = None
     '''Number of steps per environment'''
 
+    resume_from_checkpoint: str = None
+    '''Optional checkpoint used to initialize the planner before training'''
+
+    resume_partial_ignore_mismatch: bool = False
+    '''If True, warm-start only checkpoint tensors whose names and shapes match the current model.'''
+
+    action_scale: list[float] = None
+    '''Optional scale applied to learner actions before env.step.'''
+
+    teacher_policy_path: str = None
+    '''Optional TorchScript teacher policy used for online bootstrap rollouts.'''
+
+    teacher_bootstrap_steps: int = 0
+    '''Number of environment steps to execute with the online teacher policy.'''
+
+    teacher_blend_steps: int = 0
+    '''Number of environment steps to linearly blend from teacher actions to learner actions.'''
+
+    policy_control_after_online_teacher_bc: bool = False
+    '''If True, use teacher control only for the first rollout, then let the learner act.'''
+
+    teacher_diag_always: bool = False
+    '''If True, compute teacher-action diagnostics even when the teacher is not controlling.'''
+
+    teacher_dagger_collect: bool = False
+    '''If True, add teacher labels from policy-visited states to online BC batches.'''
+
+    teacher_dagger_buffer_size: int = 0
+    '''Maximum aggregated DAgger labels to keep. 0 disables persistence across rollouts.'''
+
+    teacher_dagger_export_path: Optional[str] = None
+    '''Optional path to export the aggregated DAgger obs/action buffer as a BC dataset.'''
+
+    teacher_dagger_label_mode: Literal["teacher", "executed"] = "teacher"
+    '''Whether DAgger BC targets are teacher actions or actually executed actions.'''
+
+    teacher_intervention_cos_threshold: Optional[float] = None
+    '''If set, execute teacher action when learner/teacher cosine falls below this threshold.'''
+
+    teacher_residual_beta: float = 0.0
+    '''Blend factor for teacher residual correction on policy-control steps.'''
+
+    teacher_residual_final_beta: Optional[float] = None
+    '''Optional final residual beta, linearly annealed over learning iterations.'''
+
+    teacher_oracle_mppi_gate: bool = False
+    '''Diagnostic only: execute MPPI/blended correction only when it is closer to teacher than the base policy.'''
+
+    teacher_oracle_mppi_pool_select: bool = False
+    '''Diagnostic only: gate using the best teacher-matching action from the full MPPI candidate pool.'''
+
+    teacher_oracle_mppi_margin: float = 0.0
+    '''Normalized-action L2 margin required for diagnostic teacher-oracle MPPI gate.'''
+
+    failure_strat_export_path: Optional[str] = None
+    '''Optional JSONL path for per-episode OmniReset failure stratification diagnostics.'''
+
+    failure_strat_label: str = "policy"
+    '''Label stored in failure-stratification JSONL records, e.g. base or teacher.'''
+
     learner_cfg: MPAIL2LearnerCfg = None
     '''Configuration for MPAIL learner'''
 
@@ -524,6 +1019,21 @@ class MPAIL2RunnerCfg:
         video_interval: int = None
         '''Frequency of logging rollout videos during training (in learning iterations)'''
 
+        video_enabled: bool = False
+        '''Whether to record training videos.'''
+
+        video_length: int = 0
+        '''Maximum number of frames per training video. 0 records the full rollout iteration.'''
+
+        video_resolution: tuple[int, int] = (640, 360)
+        '''Training video resolution as (width, height).'''
+
+        video_crf: int = 30
+        '''Training video quality for mp4 encoding.'''
+
+        video_fps: int = 10
+        '''Frames per second for training video uploads.'''
+
     log_cfg: LogCfg = None
 
     seed: int = None
@@ -531,3 +1041,9 @@ class MPAIL2RunnerCfg:
 
     vis_rollouts: bool = False
     '''Whether to visualize rollouts during training'''
+
+    render_during_training: bool = False
+    '''If True, actively render the simulator viewer during online rollout collection.'''
+
+    render_interval_steps: int = 1
+    '''Render every this many environment steps when render_during_training is enabled.'''

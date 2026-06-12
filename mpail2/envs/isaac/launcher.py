@@ -24,6 +24,7 @@ def parse_launcher_args(
 def isaac_session(
     args_cli: argparse.Namespace,
     enable_cameras: bool = True,
+    headless: bool | None = None,
     log_level: str = "error",
 ):
     """Launch Isaac Sim with Kit log verbosity from config.
@@ -40,6 +41,8 @@ def isaac_session(
     from isaaclab.app import AppLauncher
 
     args_cli.enable_cameras = enable_cameras
+    if headless is not None:
+        args_cli.headless = bool(headless)
 
     launcher = AppLauncher(args_cli)
     try:

@@ -21,8 +21,6 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 
 import mpail2.train.envs  # noqa: F401 - register Hydra ConfigStore nodes
-from mpail2.envs.isaac.launcher import parse_launcher_args
-from mpail2.train.loops.isaac_image import run_isaac_image_training
 from mpail2.train.registry import resolve_train_env
 
 
@@ -61,8 +59,12 @@ def main(default_env: str = "push") -> None:
         return
 
     if spec.suite == "isaac_image":
+        from mpail2.envs.isaac.launcher import parse_launcher_args
+
         launcher_args = parse_launcher_args("Train MPAIL2 on Isaac Franka image tasks.")
         cfg = _compose_config(config_name=spec.config_name, overrides=sys.argv[1:])
+
+        from mpail2.train.loops.isaac_image import run_isaac_image_training
 
         run_isaac_image_training(cfg, launcher_args, spec)
         return

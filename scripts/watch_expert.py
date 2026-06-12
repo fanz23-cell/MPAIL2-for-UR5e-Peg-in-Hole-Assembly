@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Watch expert policy in Isaac Sim and record a video.
+"""Watch expert policy in Isaac Sim.
 
 Usage:
     conda run -n mpail2-omnireset python scripts/watch_expert.py \
@@ -15,6 +15,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", type=Path, required=True)
 parser.add_argument("--output", type=Path, default=Path("/tmp/expert_demo.mp4"))
 parser.add_argument("--num-steps", type=int, default=320)
+parser.add_argument("--print-every", type=int, default=10)
+parser.add_argument("--sleep", type=float, default=0.0)
+parser.add_argument("--no-record", action="store_true", help="Step in the live viewer without saving video frames.")
+parser.add_argument("--clip-actions", type=float, default=1.0, help="Clip expert actions before stepping; <=0 disables.")
+parser.add_argument(
+    "--reset-types",
+    nargs="+",
+    default=None,
+    help="Optional OmniReset reset_types override, e.g. ObjectAnywhereEEGrasped",
+)
 parser.add_argument("--task", default="OmniReset-Ur5eRobotiq2f85-RelCartesianOSC-State-Finetune-Play-v0")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
@@ -22,6 +32,8 @@ sys.argv = [sys.argv[0]]
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+import time
 
 import torch, gymnasium as gym, imageio
 import torch.nn as nn
@@ -59,7 +71,16 @@ class _Actor(nn.Module):
 def main():
     device = args_cli.device or "cuda"
     env_cfg = parse_env_cfg(args_cli.task, device=device, num_envs=1)
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
+    if args_cli.reset_types:
+        reset_event = getattr(getattr(env_cfg, "events", None), "reset_from_reset_states", None)
+        params = getattr(reset_event, "params", None)
+        if params is None:
+            raise ValueError("Requested --reset-types, but env_cfg has no reset_from_reset_states params.")
+        params["reset_types"] = list(args_cli.reset_types)
+        params["probs"] = [1.0 / len(args_cli.reset_types)] * len(args_cli.reset_types)
+        print(f"[INFO] Reset override: {params['reset_types']} probs={params['probs']}")
+    render_mode = None if args_cli.no_record else "rgb_array"
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode=render_mode)
 
     ckpt = torch.load(str(args_cli.checkpoint), map_location=device, weights_only=False)
     policy = _Actor(ckpt["model_state_dict"], device)
@@ -69,22 +90,43 @@ def main():
     frames = []
     obs, _ = env.reset()
     obs_t = obs["policy"] if isinstance(obs, dict) else obs
+    total_reward = torch.zeros(1, device=device)
 
     for step in range(args_cli.num_steps):
         actions = policy(obs_t)
-        obs, _, terms, truncs, _ = env.step(actions)
+        if args_cli.clip_actions and args_cli.clip_actions > 0:
+            actions = actions.clamp(-args_cli.clip_actions, args_cli.clip_actions)
+        obs, rewards, terms, truncs, _ = env.step(actions)
         obs_t = obs["policy"] if isinstance(obs, dict) else obs
+        rewards = rewards.to(device)
+        total_reward += rewards
 
-        frame = env.render()
-        if frame is not None:
-            frames.append(frame)
+        if not args_cli.no_record:
+            frame = env.render()
+            if frame is not None:
+                frames.append(frame)
 
-        if (terms | truncs).any():
+        dones = terms | truncs
+        if step % args_cli.print_every == 0 or dones.any():
+            print(
+                f"step={step:04d} reward={rewards.mean().item():.4f} "
+                f"total_reward={total_reward.mean().item():.4f} "
+                f"action_norm={actions.norm(dim=-1).mean().item():.4f} done={bool(dones.any())}",
+                flush=True,
+            )
+
+        if dones.any():
             print(f"  Episode ended at step {step}")
             obs, _ = env.reset()
             obs_t = obs["policy"] if isinstance(obs, dict) else obs
+            total_reward.zero_()
+
+        if args_cli.sleep > 0:
+            time.sleep(args_cli.sleep)
 
     env.close()
+    if args_cli.no_record:
+        return
     if frames:
         args_cli.output.parent.mkdir(parents=True, exist_ok=True)
         imageio.mimsave(str(args_cli.output), frames, fps=10)

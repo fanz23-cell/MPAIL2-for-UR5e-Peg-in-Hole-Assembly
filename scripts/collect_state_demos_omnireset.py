@@ -33,6 +33,12 @@ parser.add_argument(
     help="Registered Isaac Sim task ID to run",
 )
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument(
+    "--reset-types",
+    nargs="+",
+    default=None,
+    help="Optional OmniReset reset_types override, e.g. ObjectPartiallyAssembledEEGrasped",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
 
@@ -109,6 +115,14 @@ def main() -> None:
 
     # build env
     env_cfg = parse_env_cfg(args_cli.task, device=device, num_envs=args_cli.num_envs)
+    if args_cli.reset_types:
+        reset_event = getattr(getattr(env_cfg, "events", None), "reset_from_reset_states", None)
+        params = getattr(reset_event, "params", None)
+        if params is None:
+            raise ValueError("Requested --reset-types, but env_cfg has no reset_from_reset_states params.")
+        params["reset_types"] = list(args_cli.reset_types)
+        params["probs"] = [1.0 / len(args_cli.reset_types)] * len(args_cli.reset_types)
+        print(f"[INFO] Reset override: {params['reset_types']} probs={params['probs']}")
     env_cfg.seed = args_cli.seed
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env, clip_actions=1.0)
@@ -130,6 +144,7 @@ def main() -> None:
     raw_obs = env.get_observations()
     obs = _extract_policy_obs(raw_obs)
     obs_list: list[torch.Tensor] = []
+    action_list: list[torch.Tensor] = []
     next_obs_list: list[torch.Tensor] = []
 
     target = args_cli.num_steps
@@ -142,6 +157,7 @@ def main() -> None:
         next_obs = _extract_policy_obs(raw_next_obs)
 
         obs_list.append(obs.cpu())
+        action_list.append(actions.cpu())
         next_obs_list.append(next_obs.cpu())
         obs = next_obs
         collected += args_cli.num_envs
@@ -153,6 +169,7 @@ def main() -> None:
 
     # save in format that convert_omnireset_demo.py expects
     obs_tensor = torch.cat(obs_list, dim=0)
+    actions_tensor = torch.cat(action_list, dim=0)
     nobs_tensor = torch.cat(next_obs_list, dim=0)
 
     args_cli.output.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +177,7 @@ def main() -> None:
         {
             "data": {
                 "obs": {"policy": obs_tensor},
+                "actions": actions_tensor,
                 "next_obs": {"policy": nobs_tensor},
             }
         },

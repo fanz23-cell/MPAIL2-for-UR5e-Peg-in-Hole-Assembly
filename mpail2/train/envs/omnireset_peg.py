@@ -29,6 +29,10 @@ ENV_SPEC = {
 class OmniResetPegTrainConfig(IsaacHydraTrainConfig):
     task: str = "OmniReset-Ur5eRobotiq2f85-RelCartesianOSC-State-Finetune-Play-v0"
     num_envs: int = 32
+    omnireset_mpail_wrapper: bool = True
+    omnireset_raw_action_limit: list[float] = field(
+        default_factory=lambda: [40.0, 40.0, 80.0, 30.0, 80.0, 15.0, 35.0]
+    )
     log: LogConfig = field(
         default_factory=lambda: LogConfig(
             run_name="mpail2_omnireset_peg",

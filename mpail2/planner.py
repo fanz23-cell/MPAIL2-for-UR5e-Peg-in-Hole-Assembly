@@ -88,6 +88,10 @@ class Planner(torch.nn.Module):
         self._returns = torch.zeros_like(self._z_rollouts[..., :-1, 0]) # [num_envs, K, T]; transitions is T - 1
         self._weights = torch.zeros_like(self._returns[..., 0]) # [num_envs, K]
         self._opt_states = torch.zeros_like(self._z_rollouts[:, 0, ...])
+        self._unpenalized_traj_returns = torch.zeros((self.num_envs, self.sampling.K), device=self.device, dtype=self.dtype)
+        self._plan_delta_penalty = torch.zeros_like(self._unpenalized_traj_returns)
+        self._score_traj_returns = torch.zeros_like(self._unpenalized_traj_returns)
+        self.register_buffer("_reward_center", torch.zeros((), device=self.device, dtype=self.dtype))
 
         self._pred_obs = self.decoder is not None
         if self._pred_obs:
@@ -98,6 +102,15 @@ class Planner(torch.nn.Module):
         # For action selection wrappers
         self._prior_controls = torch.zeros((self.num_envs, self.sampling.K, self.sampling.T, self.sampling.nu),
                                                   device=self.device, dtype=self.dtype) # [num_envs, K, T, nu]
+        self._elite_actions = torch.zeros(
+            (self.num_envs, self.cfg.num_elites, self.sampling.T, self.sampling.nu),
+            device=self.device, dtype=self.dtype
+        )
+        self._elite_rollouts = torch.zeros(
+            (self.num_envs, self.cfg.num_elites, self.sampling.T + 1, self.dynamics.cfg.latent_dim),
+            device=self.device, dtype=self.dtype
+        )
+        self._elite_returns = torch.zeros((self.num_envs, self.cfg.num_elites), device=self.device, dtype=self.dtype)
 
         # Initialize visualization if configured
         self.vis = None
@@ -118,6 +131,7 @@ class Planner(torch.nn.Module):
             (num_envs, self.dynamics.cfg.action_dim),
             device=self.device, dtype=self.dtype
         )
+        self._trust_region_base_plan = None
 
         self.cfg = policy_config
         self.to(device=device, dtype=dtype)
@@ -160,12 +174,22 @@ class Planner(torch.nn.Module):
         states = rollouts[..., :-1, :]
         next_states = rollouts[..., 1:, :]
         rewards[...] = self.reward(state=states, action=actions, next_state=next_states)
+        rewards[...] = self._calibrate_rewards(rewards)
 
-        # Evaluate terminal state value
-        ts_states = states[..., -1, :]
-        ts_actions = actions[..., -1, :]
-        # Override last step reward with terminal state value
-        rewards[..., -1] = self.value(state=ts_states, action=ts_actions, return_type='avg')
+        # Add terminal value at the true terminal rollout state.
+        #
+        # The original MPAIL TD cost keeps every single-step transition cost and
+        # adds a separate terminal cost.  Our compact return tensor has T slots
+        # for T actions, so add the terminal value to the last transition reward
+        # instead of overwriting that reward.  This also preserves the final
+        # transition when terminal_value_scale is 0.
+        terminal_value_scale = float(getattr(self.cfg, "terminal_value_scale", 1.0))
+        if terminal_value_scale != 0.0:
+            rewards[..., -1] = rewards[..., -1] + terminal_value_scale * self.value(
+                state=rollouts[..., -1, :],
+                action=actions[..., -1, :],
+                return_type=self.cfg.value_return_type,
+            )
 
         if self.gamma is not None:
             _gam_factors = self.gamma ** torch.arange(
@@ -173,6 +197,20 @@ class Planner(torch.nn.Module):
             )
             rewards *= _gam_factors
 
+        return rewards
+
+    def set_reward_center(self, reward_center: float | torch.Tensor):
+        """Set the scalar center subtracted from learned rewards during planning."""
+        if not torch.is_tensor(reward_center):
+            reward_center = torch.tensor(reward_center, device=self.device, dtype=self.dtype)
+        self._reward_center.copy_(reward_center.detach().to(device=self.device, dtype=self.dtype))
+
+    def _calibrate_rewards(self, rewards: torch.Tensor) -> torch.Tensor:
+        if self.cfg.reward_center_for_planning:
+            rewards = rewards - self._reward_center.to(device=rewards.device, dtype=rewards.dtype)
+        clip = self.cfg.reward_clip_for_planning
+        if clip is not None and clip > 0:
+            rewards = rewards.clamp(-clip, clip)
         return rewards
 
     @property
@@ -189,12 +227,20 @@ class Planner(torch.nn.Module):
         use_prev_opt: bool = True,
         vis_rollouts: bool = False,
         deterministic:bool=False,
+        base_plan: Optional[torch.Tensor] = None,
+        action_library_plans: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
 
         if self._obs_normalizer is not None:
             observations = self._obs_normalizer(observations)
 
-        actions = self.step(obs=observations, deterministic=deterministic).squeeze(-2)  # Update belief
+        actions = self.step(
+            obs=observations,
+            use_prev_opt=use_prev_opt,
+            deterministic=deterministic,
+            base_plan=base_plan,
+            action_library_plans=action_library_plans,
+        ).squeeze(-2)  # Update belief
 
         if vis_rollouts:
             self.create_vis()
@@ -226,34 +272,65 @@ class Planner(torch.nn.Module):
 
         self.sampling.reset_iter_state(prev_controls=self._opt_controls, reset_idx=reset_inds)
 
-    def step(self, obs, use_prev_opt:bool=True, deterministic:bool=False) -> torch.Tensor:
+    def step(
+        self,
+        obs,
+        use_prev_opt: bool = True,
+        deterministic: bool = False,
+        base_plan: Optional[torch.Tensor] = None,
+        action_library_plans: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         '''
         Perform update and forward pass of the MPPI controller in immediate sequence.
         Returns next best controls. Seeds optimization with previous optimal controls.
         '''
         self.update(obs) # Update belief
 
-        # Seeds samples with previous mean if use_prev_opt is True
-        if use_prev_opt:
+        if base_plan is not None:
+            self._opt_controls[:] = 0.
+            plan = base_plan.to(device=self.device, dtype=self.dtype)
+            steps = min(plan.shape[-2], self._opt_controls.shape[-2])
+            dims = min(plan.shape[-1], self._opt_controls.shape[-1])
+            self._opt_controls[:, :steps, :dims] = plan[:, :steps, :dims]
+            if steps < self._opt_controls.shape[-2] and steps > 0:
+                self._opt_controls[:, steps:, :dims] = plan[:, steps - 1:steps, :dims]
+            self._trust_region_base_plan = self._opt_controls.detach().clone()
+        elif use_prev_opt:
             # Fills in the last u_per_command controls with 0
             self._opt_controls[:] = torch.roll(self._opt_controls, shifts=-self.u_per_command, dims=-2)
             self._opt_controls[:, -self.u_per_command:, :] = 0.
+            self._trust_region_base_plan = None
         else:
             self._opt_controls[:] = 0.
+            self._trust_region_base_plan = None
 
         self.sampling.reset_iter_state(prev_controls=self._opt_controls)
 
         for i in range(self.cfg.opt_iters - 1):
             # Subsequent optimization uses previous optimal controls
-            plan = self.optimize(obs, iter=i, deterministic=True)
+            plan = self.optimize(
+                obs,
+                iter=i,
+                deterministic=True,
+                action_library_plans=action_library_plans,
+            )
 
         plan = self.optimize(
-            obs, iter=self.cfg.opt_iters - 1, deterministic=deterministic
+            obs,
+            iter=self.cfg.opt_iters - 1,
+            deterministic=deterministic,
+            action_library_plans=action_library_plans,
         )
 
         return plan[:, :self.u_per_command, :] # Forward pass and next best control
 
-    def optimize(self, obs, iter=None, deterministic:bool=False) -> torch.Tensor:
+    def optimize(
+        self,
+        obs,
+        iter=None,
+        deterministic: bool = False,
+        action_library_plans: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Perform forward pass of the MPPI controller.
         :param: x0
@@ -268,19 +345,40 @@ class Planner(torch.nn.Module):
         with torch.no_grad():
             z0 = self.encoder(obs)
             self._prior_controls[:] = self.sampling.sample(prev_controls=self._opt_controls, iter=iter, state=z0) # [num_envs, K, T, nu]
+            if action_library_plans is not None:
+                lib = action_library_plans.to(device=self.device, dtype=self.dtype)
+                if lib.dim() == 3:
+                    lib = lib.unsqueeze(1)
+                k = min(lib.shape[1], self._prior_controls.shape[1])
+                steps = min(lib.shape[-2], self._prior_controls.shape[-2])
+                dims = min(lib.shape[-1], self._prior_controls.shape[-1])
+                if k > 0 and steps > 0 and dims > 0:
+                    self._prior_controls[:, :k, :steps, :dims] = lib[:, :k, :steps, :dims]
+                    if steps < self._prior_controls.shape[-2]:
+                        self._prior_controls[:, :k, steps:, :dims] = lib[
+                            :, :k, steps - 1 : steps, :dims
+                        ]
             self._z_rollouts[:] = self.dynamics(z0, self._prior_controls)
             if self._pred_obs:
                 self._rollouts[:] = self.decoder(self._z_rollouts)
             self._returns[:] = self.td_return(rollouts=self._z_rollouts, actions=self._prior_controls)  # [num_envs, K, T]
+            self._unpenalized_traj_returns[:] = self._returns.sum(dim=-1)
+            self._plan_delta_penalty.zero_()
+            penalty_coeff = float(getattr(self.cfg, "base_plan_delta_penalty", 0.0) or 0.0)
+            if penalty_coeff > 0.0 and self._trust_region_base_plan is not None:
+                base_plan = self._trust_region_base_plan.to(device=self.device, dtype=self.dtype)
+                delta = self._prior_controls - base_plan.unsqueeze(1)
+                self._plan_delta_penalty[:] = penalty_coeff * delta.pow(2).sum(dim=(-1, -2))
+            self._score_traj_returns[:] = self._unpenalized_traj_returns - self._plan_delta_penalty
 
         # Update weights and optimal controls via CEM-MPPI
-        _elite_idxs = torch.topk(self._returns.sum(dim=-1), k=self.cfg.num_elites).indices
+        _elite_idxs = torch.topk(self._score_traj_returns, k=self.cfg.num_elites).indices
         _elite_values = self._returns.gather(
             dim=-2,
             index=_elite_idxs.unsqueeze(-1)
         ) # [num_envs, num_elites, T]
 
-        elite_rewards = _elite_values.sum(dim=-1)  # [num_envs, num_elites]
+        elite_rewards = self._score_traj_returns.gather(dim=1, index=_elite_idxs)  # [num_envs, num_elites]
         max_value = elite_rewards.max(dim=-1, keepdim=True).values  # [num_envs, 1]
         score = torch.exp((1. / self.temperature) * (elite_rewards - max_value))  # [num_envs, num_elites]
         score = score / (score.sum(dim=-1, keepdim=True) + 1e-9)  # normalize
@@ -290,6 +388,13 @@ class Planner(torch.nn.Module):
             dim=1,
             index=_elite_idxs.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self._prior_controls.shape[-2], self._prior_controls.shape[-1])
         )
+        _elite_rollouts = self._z_rollouts.gather(
+            dim=1,
+            index=_elite_idxs.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self._z_rollouts.shape[-2], self._z_rollouts.shape[-1])
+        )
+        self._elite_actions[:] = _elite_actions.detach()
+        self._elite_rollouts[:] = _elite_rollouts.detach()
+        self._elite_returns[:] = elite_rewards.detach()
         self.sampling.update_plan_dist_from_elites(_elite_actions, score)
 
         # Set weights to zero except for elites
@@ -324,6 +429,8 @@ class Planner(torch.nn.Module):
         :return: [num_envs, K, T] - log probabilities of sampled actions under the action distribution
         '''
         _K_policy = self.sampling._K_policy
+        if _K_policy <= 0:
+            return torch.zeros(self.num_envs, device=self.device, dtype=self.dtype)
         policy_weights = self._weights[..., -_K_policy:].detach().clone()  # [num_envs, K_policy]
         influence = policy_weights.sum(dim=-1)  # [num_envs, K_policy]
         return influence
@@ -342,9 +449,15 @@ class Planner(torch.nn.Module):
         std_ss_rewards = _rewards[..., :-1].std()
         std_ts_rewards = _rewards[..., -1].std()
         _traj_rewards = _rewards.sum(dim=-1) # [num_envs, K]
+        _score_returns = self._score_traj_returns.detach().clone()
+        _delta_penalty = self._plan_delta_penalty.detach().clone()
         min_traj_reward = _traj_rewards.min(dim=-1).values.mean()
         max_traj_reward = _traj_rewards.max(dim=-1).values.mean()
         mean_std_traj_reward = _traj_rewards.std(dim=-1).mean()
+        min_score_return = _score_returns.min(dim=-1).values.mean()
+        max_score_return = _score_returns.max(dim=-1).values.mean()
+        mean_delta_penalty = _delta_penalty.mean()
+        max_delta_penalty = _delta_penalty.max(dim=-1).values.mean()
         policy_influence = self.compute_policy_influence().mean()
 
         # Compute std of actions
@@ -363,6 +476,10 @@ class Planner(torch.nn.Module):
             "MPPI/Min Return": min_traj_reward,
             "MPPI/Max Return": max_traj_reward,
             "MPPI/Std Return": mean_std_traj_reward,
+            "MPPI/Min Score Return": min_score_return,
+            "MPPI/Max Score Return": max_score_return,
+            "MPPI/Mean Base Delta Penalty": mean_delta_penalty,
+            "MPPI/Max Base Delta Penalty": max_delta_penalty,
             "MPPI/Mean Policy Influence": policy_influence.item(),
         }
 

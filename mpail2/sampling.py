@@ -241,10 +241,14 @@ class PolicySampling(torch.nn.Module):
         if self.max_control is not None:
             noise_controls = torch.tanh(noise_controls)
 
-        # Sample from policy network (already squashed)
-        policy_plans = self.policy.plan(state, shape=torch.Size([self._K_policy]))  # [_K_policy, num_envs, T, nu]
-        policy_plans = policy_plans.transpose(0, 1)  # [num_envs, _K_policy, T, nu]
+        parts = []
+        if self._K_noise > 0:
+            parts.append(noise_controls)
+        if self._K_policy > 0:
+            policy_plans = self.policy.plan(state, shape=torch.Size([self._K_policy]))  # [_K_policy, num_envs, T, nu]
+            policy_plans = policy_plans.transpose(0, 1)  # [num_envs, _K_policy, T, nu]
+            parts.append(policy_plans)
 
-        controls = torch.cat([noise_controls, policy_plans], dim=-3)  # [num_envs, K, T, nu]
+        controls = torch.cat(parts, dim=-3)  # [num_envs, K, T, nu]
 
         return controls

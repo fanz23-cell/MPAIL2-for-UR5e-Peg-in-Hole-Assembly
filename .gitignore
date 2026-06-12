@@ -10,3 +10,21 @@ _isaaclab/
 _vendor/
 .cache/
 .mujoco/
+
+# Local experiment artifacts and external checkouts.
+mpail-research/
+*.ckpt
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.npy
+*.npz
+
+# New demo collections are backed up on the external drive, not regular Git.
+# Already tracked demo files remain tracked.
+mpail2/train/isaac_franka/demos/fixed_full_task/
+mpail2/train/isaac_franka/demos/official_full_150ep/
+mpail2/train/isaac_franka/demos/official_full_x2/
+mpail2/train/isaac_franka/demos/official_route_a_x2/
+mpail2/train/isaac_franka/demos/truly_fixed_full_task/
