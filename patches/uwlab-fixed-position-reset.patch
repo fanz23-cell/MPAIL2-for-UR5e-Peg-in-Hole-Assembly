@@ -1,0 +1,122 @@
+diff --git a/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/__init__.py b/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/__init__.py
+index 1e240e1..4a03049 100644
+--- a/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/__init__.py
++++ b/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/__init__.py
+@@ -33,6 +33,13 @@ gym.register(
+     kwargs={"env_cfg_entry_point": f"{__name__}.reset_states_cfg:ObjectAnywhereEEAnywhereResetStatesCfg"},
+ )
+ 
++gym.register(
++    id="OmniReset-UR5eRobotiq2f85-ObjectFixedPositionEEAnywhere-v0",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={"env_cfg_entry_point": f"{__name__}.reset_states_cfg:ObjectFixedPositionEEAnywhereResetStatesCfg"},
++)
++
+ gym.register(
+     id="OmniReset-UR5eRobotiq2f85-ObjectRestingEEGrasped-v0",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+diff --git a/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/reset_states_cfg.py b/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/reset_states_cfg.py
+index e75d6b6..d37c7fd 100644
+--- a/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/reset_states_cfg.py
++++ b/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/reset_states_cfg.py
+@@ -230,6 +230,57 @@ class ObjectAnywhereEEAnywhereEventCfg(ResetStatesBaseEventCfg):
+     )
+ 
+ 
++@configclass
++class ObjectFixedPositionEEAnywhereEventCfg(ResetStatesBaseEventCfg):
++    """Fixed peg position reset: peg at exactly the same position every episode.
++
++    Same structure as ObjectAnywhereEEAnywhereEventCfg but with peg pose_range
++    collapsed to a single point (chosen as the midpoint of the original range).
++    EE pose_range_b stays at original range so IK can always find a valid solution.
++    Hole (receptive_object) is kinematic and always at scene default position.
++    """
++    reset_insertive_object_pose = EventTerm(
++        func=task_mdp.reset_root_states_uniform,
++        mode="reset",
++        params={
++            "pose_range": {
++                # Midpoint of original ObjectAnywhereEEAnywhere range:
++                # x:(0.3,0.55) y:(-0.1,0.5) z:(0.0,0.3)
++                "x": (0.425, 0.425),  # Fixed X (midpoint)
++                "y": (0.20, 0.20),    # Fixed Y (midpoint)
++                "z": (0.15, 0.15),    # Fixed Z (midpoint)
++                "roll": (0.0, 0.0),
++                "pitch": (0.0, 0.0),
++                "yaw": (0.0, 0.0),
++            },
++            "velocity_range": {},
++            "asset_cfgs": {"insertive_object": SceneEntityCfg("insertive_object")},
++            "offset_asset_cfg": SceneEntityCfg("ur5_metal_support"),
++            "use_bottom_offset": True,
++        },
++    )
++
++    reset_end_effector_pose = EventTerm(
++        func=task_mdp.reset_end_effector_round_fixed_asset,
++        mode="reset",
++        params={
++            "fixed_asset_cfg": SceneEntityCfg("robot"),
++            "fixed_asset_offset": None,
++            "pose_range_b": {
++                "x": (0.3, 0.7),
++                "y": (-0.4, 0.4),
++                "z": (0.0, 0.5),
++                "roll": (0.0, 0.0),
++                "pitch": (np.pi / 4, 3 * np.pi / 4),
++                "yaw": (np.pi / 2, 3 * np.pi / 2),
++            },
++            "robot_ik_cfg": SceneEntityCfg(
++                "robot", joint_names=["shoulder.*", "elbow.*", "wrist.*"], body_names="robotiq_base_link"
++            ),
++        },
++    )
++
++
+ @configclass
+ class ObjectRestingEEGraspedEventCfg(ResetStatesBaseEventCfg):
+     reset_insertive_object_pose_from_reset_states = EventTerm(
+@@ -556,6 +607,12 @@ class UR5eRobotiq2f85ResetStatesCfg(ManagerBasedRLEnvCfg):
+ class ObjectAnywhereEEAnywhereResetStatesCfg(UR5eRobotiq2f85ResetStatesCfg):
+     events: ObjectAnywhereEEAnywhereEventCfg = ObjectAnywhereEEAnywhereEventCfg()
+ 
++
++@configclass
++class ObjectFixedPositionEEAnywhereResetStatesCfg(UR5eRobotiq2f85ResetStatesCfg):
++    """Fixed position reset states: all episodes start at exactly the same position."""
++    events: ObjectFixedPositionEEAnywhereEventCfg = ObjectFixedPositionEEAnywhereEventCfg()
++
+     def __post_init__(self):
+         super().__post_init__()
+         self.terminations.success.params["max_object_pos_deviation"] = np.inf
+diff --git a/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/rl_state_cfg.py b/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/rl_state_cfg.py
+index e9dbf86..00b41d8 100644
+--- a/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/rl_state_cfg.py
++++ b/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/omnireset/config/ur5e_robotiq_2f85/rl_state_cfg.py
+@@ -757,3 +757,24 @@ class Ur5eRobotiq2f85RelCartesianOSCFinetuneEvalCfg(Ur5eRobotiq2f85RlStateCfg):
+     def __post_init__(self):
+         super().__post_init__()
+         self.scene.robot = EXPLICIT_UR5E_ROBOTIQ_2F85.replace(prim_path="{ENV_REGEX_NS}/Robot")
++
++
++@configclass
++class FinetuneEvalFixedPositionEventCfg(FinetuneEvalEventCfg):
++    pass
++
++
++@configclass
++class Ur5eRobotiq2f85RelCartesianOSCFinetuneEvalFixedPositionCfg(Ur5eRobotiq2f85RlStateCfg):
++    """Fixed-peg-position variant of Eval config.
++
++    Same as FinetuneEvalCfg but with peg always reset to the same fixed position.
++    Used for fixed-position MPAIL training experiments.
++    """
++
++    events: FinetuneEvalFixedPositionEventCfg = FinetuneEvalFixedPositionEventCfg()
++    actions: Ur5eRobotiq2f85RelativeOSCEvalAction = Ur5eRobotiq2f85RelativeOSCEvalAction()
++
++    def __post_init__(self):
++        super().__post_init__()
++        self.scene.robot = EXPLICIT_UR5E_ROBOTIQ_2F85.replace(prim_path="{ENV_REGEX_NS}/Robot")

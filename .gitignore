@@ -28,3 +28,10 @@ mpail2/train/isaac_franka/demos/official_full_150ep/
 mpail2/train/isaac_franka/demos/official_full_x2/
 mpail2/train/isaac_franka/demos/official_route_a_x2/
 mpail2/train/isaac_franka/demos/truly_fixed_full_task/
+# Selected OmniReset videos referenced by the project README
+!docs/media/omnireset-s191-checkpoints-0-5-10.mp4
+!docs/media/omnireset-s191-live-training.mp4
+# Publish the reviewed source-only snapshot and the two README videos.
+!snapshots/
+!snapshots/mpail-research/
+!snapshots/mpail-research/**

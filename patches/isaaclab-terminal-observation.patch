@@ -1,0 +1,66 @@
+diff --git a/source/isaaclab/isaaclab/envs/manager_based_rl_env.py b/source/isaaclab/isaaclab/envs/manager_based_rl_env.py
+index ab8c041..feaf098 100644
+--- a/source/isaaclab/isaaclab/envs/manager_based_rl_env.py
++++ b/source/isaaclab/isaaclab/envs/manager_based_rl_env.py
+@@ -214,7 +214,19 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
+ 
+         # -- reset envs that terminated/timed-out and log the episode information
+         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
++        self.extras.pop("terminal_observation", None)
++        self.extras.pop("terminal_observation_env_ids", None)
+         if len(reset_env_ids) > 0:
++            # Capture the true pre-reset observation for done transitions.
++            # The returned obs below is computed after reset, so algorithms that
++            # learn dynamics need this terminal observation to avoid learning a
++            # false "action -> reset state" teleport.
++            history_snapshot = self._snapshot_observation_history()
++            terminal_obs = self.observation_manager.compute(update_history=True)
++            self._restore_observation_history(history_snapshot)
++            self.extras["terminal_observation"] = self._clone_observation(terminal_obs)
++            self.extras["terminal_observation_env_ids"] = reset_env_ids.clone()
++
+             # trigger recorder terms for pre-reset calls
+             self.recorder_manager.record_pre_reset(reset_env_ids)
+ 
+@@ -240,6 +252,41 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
+         # return observations, rewards, resets and extras
+         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras
+ 
++    def _clone_observation(self, obs: dict[str, Any]) -> dict[str, Any]:
++        """Clone observation tensors before reset mutates simulator buffers."""
++        cloned = {}
++        for key, value in obs.items():
++            if torch.is_tensor(value):
++                cloned[key] = value.clone()
++            elif isinstance(value, dict):
++                cloned[key] = self._clone_observation(value)
++            else:
++                cloned[key] = value
++        return cloned
++
++    def _snapshot_observation_history(self) -> dict[str, dict[str, tuple[torch.Tensor | None, torch.Tensor, int]]]:
++        """Snapshot observation history buffers before a temporary terminal obs compute."""
++        snapshot = {}
++        history_buffers = getattr(self.observation_manager, "_group_obs_term_history_buffer", {})
++        for group_name, term_buffers in history_buffers.items():
++            snapshot[group_name] = {}
++            for term_name, buffer in term_buffers.items():
++                stored = None if buffer._buffer is None else buffer._buffer.clone()
++                snapshot[group_name][term_name] = (stored, buffer._num_pushes.clone(), buffer._pointer)
++        return snapshot
++
++    def _restore_observation_history(
++        self, snapshot: dict[str, dict[str, tuple[torch.Tensor | None, torch.Tensor, int]]]
++    ):
++        """Restore observation history buffers after terminal obs capture."""
++        history_buffers = getattr(self.observation_manager, "_group_obs_term_history_buffer", {})
++        for group_name, term_snapshots in snapshot.items():
++            for term_name, (stored, num_pushes, pointer) in term_snapshots.items():
++                buffer = history_buffers[group_name][term_name]
++                buffer._buffer = None if stored is None else stored.clone()
++                buffer._num_pushes = num_pushes.clone()
++                buffer._pointer = pointer
++
+     def render(self, recompute: bool = False) -> np.ndarray | None:
+         """Run rendering without stepping through the physics.
+ 
