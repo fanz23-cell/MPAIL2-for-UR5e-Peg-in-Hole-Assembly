@@ -6,11 +6,30 @@
 
 ## 最新实验视频
 
-[![MPAIL2 / OmniReset 策略 rollout 行为预览（约 12 秒）](docs/media/omnireset-policy-rollout-preview.gif)](docs/media/omnireset-policy-rollout-4x.mp4)
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/media/omnireset-policy-rollout-4x.mp4"><img src="docs/media/omnireset-policy-rollout-preview.gif" width="480" alt="400-tier 策略 rollout 预览" /></a><br />
+      <strong>策略 rollout（400-tier 录屏）</strong><br />约 2 分 30 秒，4× 加速
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/media/omnireset-200tier-rollout-4x.mp4"><img src="docs/media/omnireset-200tier-preview.gif" width="480" alt="200-tier 策略 rollout 预览" /></a><br />
+      <strong>策略 rollout（200-tier 录屏）</strong><br />约 2 分 30 秒，4× 加速
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/media/omnireset-iqlearnpretrain-200tier-4x.mp4"><img src="docs/media/omnireset-iqlearnpretrain-preview.gif" width="480" alt="IQ-Learn 预训练策略录屏预览" /></a><br />
+      <strong>IQ-Learn 预训练录屏（200-tier）</strong><br />约 2 分钟，4× 加速
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/media/omnireset-base-policy-rollout-4x.mp4"><img src="docs/media/omnireset-base-policy-preview.gif" width="480" alt="Base policy rollout 预览" /></a><br />
+      <strong>Base policy rollout 录屏</strong><br />约 2 分 30 秒，4× 加速
+    </td>
+  </tr>
+</table>
 
-[播放加速长视频（约 2 分 30 秒，4× 加速）](docs/media/omnireset-policy-rollout-4x.mp4)
-
-视频截自归档的长时仿真录屏，经过裁切和加速，用于查看策略在插孔任务中的连续操作行为；它不作为任务成功率或稳定性结论。配置和统计口径见[实验记录](docs/EXPERIMENTS.md)。
+这些视频均为长时仿真录屏的节选，经过裁切并按 4× 加速，用于查看不同实验配置下的策略行为。视频预览不作为任务成功率或稳定性结论；实验口径见[实验记录](docs/EXPERIMENTS.md)。
 
 ## 任务是什么
 
