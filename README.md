@@ -6,11 +6,11 @@
 
 ## 最新实验视频
 
-[![S191 检查点 0、5、10 的仿真画面预览（动图）](docs/media/omnireset-s191-preview.gif)](docs/media/omnireset-s191-checkpoints-0-5-10.mp4)
+[![MPAIL2 / OmniReset 策略 rollout 行为预览（约 12 秒）](docs/media/omnireset-policy-rollout-preview.gif)](docs/media/omnireset-policy-rollout-4x.mp4)
 
-[播放检查点短片（约 80 秒）](docs/media/omnireset-s191-checkpoints-0-5-10.mp4) · [播放完整仿真录屏（约 10 分 26 秒）](docs/media/omnireset-s191-live-training.mp4)
+[播放加速长视频（约 2 分 30 秒，4× 加速）](docs/media/omnireset-policy-rollout-4x.mp4)
 
-上方动图是短片中的 10 秒预览，点击可打开完整短片。视频记录的是训练过程，供查看机器人行为变化；它们本身不代表任务成功率或稳定性结论。配置和统计口径见[实验记录](docs/EXPERIMENTS.md)。
+视频截自归档的长时仿真录屏，经过裁切和加速，用于查看策略在插孔任务中的连续操作行为；它不作为任务成功率或稳定性结论。配置和统计口径见[实验记录](docs/EXPERIMENTS.md)。
 
 ## 任务是什么
 
