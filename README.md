@@ -6,10 +6,11 @@
 
 ## 最新实验视频
 
-<a href="docs/media/omnireset-s191-checkpoints-0-5-10.mp4">S191 检查点 0、5、10 的短片（约 80 秒）</a> ·
-<a href="docs/media/omnireset-s191-live-training.mp4">S191 仿真视口录屏（约 10 分 26 秒，已裁掉桌面画面）</a>
+[![S191 检查点 0、5、10 的仿真画面预览（动图）](docs/media/omnireset-s191-preview.gif)](docs/media/omnireset-s191-checkpoints-0-5-10.mp4)
 
-短片和录屏记录的是训练过程，供查看机器人行为变化；它们本身不代表任务成功率或稳定性结论。配置和统计口径见[实验记录](docs/EXPERIMENTS.md)。
+[播放检查点短片（约 80 秒）](docs/media/omnireset-s191-checkpoints-0-5-10.mp4) · [播放完整仿真录屏（约 10 分 26 秒）](docs/media/omnireset-s191-live-training.mp4)
+
+上方动图是短片中的 10 秒预览，点击可打开完整短片。视频记录的是训练过程，供查看机器人行为变化；它们本身不代表任务成功率或稳定性结论。配置和统计口径见[实验记录](docs/EXPERIMENTS.md)。
 
 ## 任务是什么
 
